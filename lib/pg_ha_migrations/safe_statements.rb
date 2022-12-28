@@ -1,5 +1,17 @@
 module PgHaMigrations::SafeStatements
   VALID_PARTITION_TYPES = %i[range list hash]
+  VALID_LIKE_OPTIONS = %i[
+    comments
+    compression
+    constraints
+    defaults
+    generated
+    identity
+    indexes
+    statistics
+    storage
+    all
+  ]
 
   def safe_added_columns_without_default_value
     @safe_added_columns_without_default_value ||= []
@@ -290,6 +302,35 @@ module PgHaMigrations::SafeStatements
         td.primary_keys(pk_columns.concat(Array.wrap(key)).map(&:to_s).uniq)
       end
     end
+  end
+
+  def safe_clone_table(table, from:, including: [], excluding: [])
+    including_options = Array.wrap(including).map { |type| type.to_s.downcase.to_sym }
+    excluding_options = Array.wrap(excluding).map { |type| type.to_s.downcase.to_sym }
+
+    unless (including_options - VALID_LIKE_OPTIONS).empty?
+      raise ArgumentError, "Expected <including> to be a subset of #{VALID_LIKE_OPTIONS}. Received #{including_options}."
+    end
+
+    unless (excluding_options - VALID_LIKE_OPTIONS).empty?
+      raise ArgumentError, "Expected <excluding> to be a subset of #{VALID_LIKE_OPTIONS}. Received #{excluding_options}."
+    end
+
+    # TODO: is it worth validating like options for various PG versions?
+    #
+    # statistics and identity were added in PG 10
+    # generated was added in PG 12
+    # compression was added in PG 14
+
+    clause = [
+      including_options.map { |type| "INCLUDING #{type.upcase}" }.join(" "),
+      excluding_options.map { |type| "EXCLUDING #{type.upcase}" }.join(" "),
+    ].join(" ").strip
+
+    quoted_table = connection.quote_table_name(table)
+    quoted_source_table = connection.quote_table_name(from)
+
+    connection.execute("CREATE TABLE #{quoted_table} (LIKE #{quoted_source_table} #{clause})")
   end
 
   def _per_migration_caller
