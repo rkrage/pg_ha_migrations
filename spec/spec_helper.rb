@@ -17,6 +17,13 @@ RSpec.configure do |config|
     server_version = ActiveRecord::Base.connection.select_value("SHOW server_version")
     puts "DEBUG: Connecting to Postgres server version #{server_version}"
 
+    ActiveRecord::Base.connection.execute("DROP EXTENSION IF EXISTS pg_partman CASCADE")
+
+    # Drop parent partition tables first to automatically drop children
+    ActiveRecord::Base.connection.select_values("SELECT c.relname FROM pg_class c JOIN pg_partitioned_table p on c.oid = p.partrelid").each do |table|
+      ActiveRecord::Base.connection.execute("DROP TABLE #{table} CASCADE")
+    end
+
     ActiveRecord::Base.connection.tables.each do |table|
       ActiveRecord::Base.connection.execute("DROP TABLE #{table} CASCADE")
     end
@@ -26,8 +33,14 @@ RSpec.configure do |config|
   end
 
   config.after(:each) do
-    # ActiveRecord::Base.connection.tables does not include partitioned tables in Rails 5.1
-    ActiveRecord::Base.connection.select_values("SELECT tablename FROM pg_tables WHERE schemaname = 'public'").each do |table|
+    ActiveRecord::Base.connection.execute("DROP EXTENSION IF EXISTS pg_partman CASCADE")
+
+    # Drop parent partition tables first to automatically drop children
+    ActiveRecord::Base.connection.select_values("SELECT c.relname FROM pg_class c JOIN pg_partitioned_table p on c.oid = p.partrelid").each do |table|
+      ActiveRecord::Base.connection.execute("DROP TABLE #{table} CASCADE")
+    end
+
+    ActiveRecord::Base.connection.tables.each do |table|
       ActiveRecord::Base.connection.execute("DROP TABLE #{table} CASCADE")
     end
     ActiveRecord::Base.connection.select_values("SELECT typname FROM pg_type WHERE typtype = 'e'").each do |enum|
