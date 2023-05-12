@@ -226,7 +226,7 @@ module PgHaMigrations::SafeStatements
     end
   end
 
-  def safe_create_partitioned_table(table, key:, type:, infer_primary_key: nil, **options, &block)
+  def safe_create_partitioned_table(table, key:, type:, infer_primary_key: nil, template: nil, **options, &block)
     raise ArgumentError, "Expected <key> to be present" unless key.present?
 
     unless VALID_PARTITION_TYPES.include?(type)
@@ -273,15 +273,9 @@ module PgHaMigrations::SafeStatements
       next unless options[:id]
 
       pk_columns = td.columns.each_with_object([]) do |col, arr|
-        if col.respond_to?(:primary_key)
-          next unless col.primary_key
+        next unless col.options[:primary_key]
 
-          col.primary_key = false
-        else
-          next unless col.options[:primary_key]
-
-          col.options[:primary_key] = false
-        end
+        col.options[:primary_key] = false
 
         arr << col.name
       end
@@ -290,6 +284,80 @@ module PgHaMigrations::SafeStatements
         td.primary_keys(pk_columns.concat(Array.wrap(key)).map(&:to_s).uniq)
       end
     end
+
+    if template
+      connection.execute(<<~SQL)
+        CREATE TABLE #{connection.quote_table_name(template)} (
+          LIKE #{connection.quote_table_name(table)} INCLUDING ALL EXCLUDING INDEXES
+        )
+      SQL
+    end
+  end
+
+  def safe_partman_create_parent(table, key:, interval:, premake: 1, infinite_premake: true, inherit_privileges: true, template: nil, start_partition: nil)
+    raise ArgumentError, "Expected <key> to be present" unless key.present?
+    raise ArgumentError, "Expected <interval> to be present" unless interval.present?
+
+    if ActiveRecord::Base.connection.postgresql_version < 10_00_00
+      raise PgHaMigrations::InvalidMigrationError, "Native partitioning not supported on Postgres databases before version 10"
+    end
+
+    partman_schema = connection.select_value(<<~SQL)
+      SELECT nspname
+      FROM pg_namespace JOIN pg_extension
+        ON pg_namespace.oid = pg_extension.extnamespace
+      WHERE pg_extension.extname = 'pg_partman'
+    SQL
+
+    raise PgHaMigrations::InvalidMigrationError, "The pg_partman extension is not installed" unless partman_schema.present?
+
+    if !table.to_s.include?(".")
+      schema = connection.select_value(<<~SQL)
+        SELECT schemaname
+        FROM pg_tables
+        WHERE tablename = '#{table}' AND schemaname = ANY (current_schemas(false))
+      SQL
+
+      raise PgHaMigrations::InvalidMigrationError, "Could not find parent table in search path" unless schema.present?
+
+      table = "#{schema}.#{table}"
+    end
+
+    if template.present? && !template.to_s.include?(".")
+      template_schema = connection.select_value(<<~SQL)
+        SELECT schemaname
+        FROM pg_tables
+        WHERE tablename = '#{template}' AND schemaname = ANY (current_schemas(false))
+      SQL
+
+      raise PgHaMigrations::InvalidMigrationError, "Could not find template table in search path" unless template_schema.present?
+
+      template = "#{template_schema}.#{template}"
+    end
+
+    options = {
+      p_parent_table: table,
+      p_control: key,
+      p_type: "native",
+      p_interval: interval,
+      p_premake: premake,
+    }
+
+    options[:p_template_table] = template if template.present?
+    options[:p_start_partition] = start_partition if start_partition.present?
+
+    create_parent_sql = options.map { |k, v| "#{k} := '#{v}'" }.join(", ")
+
+    connection.execute("SELECT #{connection.quote_schema_name(partman_schema)}.create_parent(#{create_parent_sql})")
+
+    connection.execute(<<~SQL)
+      UPDATE #{connection.quote_schema_name(partman_schema)}.part_config SET
+        infinite_time_partitions = '#{infinite_premake ? "t" : "f"}',
+        inherit_privileges = '#{inherit_privileges ? "t" : "f"}'
+      WHERE parent_table = '#{table}'
+    SQL
+
+    connection.execute("SELECT #{connection.quote_schema_name(partman_schema)}.reapply_privileges('#{table}')")
   end
 
   def _per_migration_caller

@@ -18,6 +18,7 @@ RSpec.configure do |config|
     puts "DEBUG: Connecting to Postgres server version #{server_version}"
 
     ActiveRecord::Base.connection.execute("DROP EXTENSION IF EXISTS pg_partman CASCADE")
+    ActiveRecord::Base.connection.execute("DROP SCHEMA IF EXISTS partman CASCADE")
 
     # Drop parent partition tables first to automatically drop children
     ActiveRecord::Base.connection.select_values("SELECT c.relname FROM pg_class c JOIN pg_partitioned_table p on c.oid = p.partrelid").each do |table|
@@ -34,6 +35,7 @@ RSpec.configure do |config|
 
   config.after(:each) do
     ActiveRecord::Base.connection.execute("DROP EXTENSION IF EXISTS pg_partman CASCADE")
+    ActiveRecord::Base.connection.execute("DROP SCHEMA IF EXISTS partman CASCADE")
 
     # Drop parent partition tables first to automatically drop children
     ActiveRecord::Base.connection.select_values("SELECT c.relname FROM pg_class c JOIN pg_partitioned_table p on c.oid = p.partrelid").each do |table|

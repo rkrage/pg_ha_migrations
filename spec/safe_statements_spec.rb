@@ -1766,6 +1766,70 @@ RSpec.describe PgHaMigrations::SafeStatements do
           end
         end
 
+        describe "safe_partman_create_parent" do
+          context "when extension not installed" do
+            it "raises error" do
+              migration = Class.new(migration_klass) do
+                def up
+                  safe_create_partitioned_table :foos3, type: :range, key: :created_at do |t|
+                    t.timestamps :null => false
+                    t.text :text_column
+                  end
+
+                  safe_partman_create_parent :foos3, key: :created_at, interval: "monthly"
+                end
+              end
+
+              expect do
+                migration.suppress_messages { migration.migrate(:up) }
+              end.to raise_error(PgHaMigrations::InvalidMigrationError, "The pg_partman extension is not installed")
+            end
+          end
+
+          context "when extension installed" do
+            before { ActiveRecord::Base.connection.execute("CREATE EXTENSION pg_partman") }
+
+            it "works" do
+              migration = Class.new(migration_klass) do
+                def up
+                  safe_create_partitioned_table :foos3, type: :range, key: :created_at, template: :foos3_template do |t|
+                    t.timestamps :null => false
+                    t.text :text_column
+                  end
+
+                  safe_partman_create_parent(:foos3, key: :created_at, interval: "monthly", template: :foos3_template)
+                end
+              end
+
+              migration.suppress_messages { migration.migrate(:up) }
+            end
+          end
+
+          context "when extension installed in different schema" do
+            before do
+              ActiveRecord::Base.connection.execute(<<~SQL)
+                CREATE SCHEMA partman;
+                CREATE EXTENSION pg_partman SCHEMA partman;
+              SQL
+            end
+
+            it "works" do
+              migration = Class.new(migration_klass) do
+                def up
+                  safe_create_partitioned_table :foos3, type: :range, key: :created_at, template: :foos3_template do |t|
+                    t.timestamps :null => false
+                    t.text :text_column
+                  end
+
+                  safe_partman_create_parent :foos3, key: :created_at, interval: "monthly", template: :foos3_template
+                end
+              end
+
+              migration.suppress_messages { migration.migrate(:up) }
+            end
+          end
+        end
+
         describe "safe_create_partitioned_table" do
           it "creates range partition on supported versions" do
             migration = Class.new(migration_klass) do
